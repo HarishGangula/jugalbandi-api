@@ -6,6 +6,42 @@ from pydub import AudioSegment
 from google.cloud import texttospeech, speech, translate
 from urllib.parse import urlparse
 
+asr_mapping = {
+    "bn": "ai4bharat/conformer-multilingual-indo_aryan-gpu--t4",
+    "en": "ai4bharat/whisper-medium-en--gpu--t4",
+    "gu": "ai4bharat/conformer-multilingual-indo_aryan-gpu--t4",
+    "hi": "ai4bharat/conformer-hi-gpu--t4",
+    "kn": "ai4bharat/conformer-multilingual-dravidian-gpu--t4",
+    "ml": "ai4bharat/conformer-multilingual-dravidian-gpu--t4",
+    "mr": "ai4bharat/conformer-multilingual-indo_aryan-gpu--t4",
+    "or": "ai4bharat/conformer-multilingual-indo_aryan-gpu--t4",
+    "pa": "ai4bharat/conformer-multilingual-indo_aryan-gpu--t4",
+    "sa": "ai4bharat/conformer-multilingual-indo_aryan-gpu--t4",
+    "ta": "ai4bharat/conformer-multilingual-dravidian-gpu--t4",
+    "te": "ai4bharat/conformer-multilingual-dravidian-gpu--t4",
+    "ur": "ai4bharat/conformer-multilingual-indo_aryan-gpu--t4"
+}
+
+translation_serviceId = "ai4bharat/indictrans-v2-all-gpu--t4"
+
+tts_mapping = {
+    "as": "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4",
+    "bn": "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4",
+    "brx": "ai4bharat/indic-tts-coqui-misc-gpu--t4",
+    "en": "ai4bharat/indic-tts-coqui-misc-gpu--t4",
+    "gu": "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4",
+    "hi": "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4",
+    "kn": "ai4bharat/indic-tts-coqui-dravidian-gpu--t4",
+    "ml": "ai4bharat/indic-tts-coqui-dravidian-gpu--t4",
+    "mni": "ai4bharat/indic-tts-coqui-misc-gpu--t4",
+    "mr": "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4",
+    "or": "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4",
+    "pa": "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4",
+    "raj": "ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4",
+    "ta": "ai4bharat/indic-tts-coqui-dravidian-gpu--t4",
+    "te": "ai4bharat/indic-tts-coqui-dravidian-gpu--t4"
+}
+
 def is_url(string):
     try:
         result = urlparse(string)
@@ -47,17 +83,36 @@ def google_speech_to_text(wav_file_content, input_language):
     return response.results[0].alternatives[0].transcript
 
 def speech_to_text(encoded_string, input_language):
-    data = {"config": {"language": {"sourceLanguage": f"{input_language}"},
-                       "transcriptionFormat": {"value": "transcript"},
-                       "audioFormat": "wav",
-                       "samplingRate": "16000",
-                       "postProcessors": None
-                       },
-            "audio": [{"audioContent": encoded_string}]
+
+    url = "https://api.dhruva.ai4bharat.org/services/inference/pipeline"
+
+    payload = json.dumps({
+        "pipelineTasks": [
+            {
+                "taskType": "asr",
+                "config": {
+                    "language": {
+                        "sourceLanguage": input_language
+                    },
+                    "serviceId": asr_mapping[input_language]
+                }
             }
-    api_url = "https://asr-api.ai4bharat.org/asr/v1/recognize/" + input_language
-    response = requests.post(api_url, data=json.dumps(data))
-    text = json.loads(response.text)["output"][0]["source"]
+        ],
+        "inputData": {
+            "audio": [
+                {
+                    "audioContent": encoded_string
+                }
+            ]
+        }
+    })
+    headers = {
+        'Authorization': os.environ["AI4BHARAT_API_KEY"],
+        'Content-Type': 'application/json'
+    }
+
+    response = requests.request("POST", url, headers=headers, data=payload)
+    text = json.loads(response.text)["pipelineResponse"][0]["output"][0]["source"]
     return text
 
 def google_translate_text(text, source, destination, project_id="indian-legal-bert"):
@@ -76,18 +131,42 @@ def google_translate_text(text, source, destination, project_id="indian-legal-be
     return response.translations[0].translated_text
 
 def indic_translation(text, source, destination):
+    if source == destination:
+        return text
     try:
-        data = {
-            "source_language": source,
-            "target_language": destination,
-            "text": text
+        url = "https://api.dhruva.ai4bharat.org/services/inference/pipeline"
+
+        payload = json.dumps({
+            "pipelineTasks": [
+                {
+                    "taskType": "tts",
+                    "config": {
+                        "language": {
+                            "sourceLanguage": source,
+                            "targetLanguage": destination
+                        },
+                        "serviceId": translation_serviceId
+                    }
+                }
+            ],
+            "inputData": {
+                "input": [
+                    {
+                        "source": text
+                    }
+                ]
+            }
+        })
+        headers = {
+            'Authorization': os.environ["AI4BHARAT_API_KEY"],
+            'Content-Type': 'application/json'
         }
-        api_url = "https://nmt-api.ai4bharat.org/translate_sentence"
-        response = requests.post(api_url, data=json.dumps(data), timeout=60)
-        indic_text = json.loads(response.text)
+
+        response = requests.request("POST", url, headers=headers, data=payload)
+        indic_text = json.loads(response.text)["pipelineResponse"][0]["output"][0]["target"]
     except:
         indic_text = google_translate_text(text, source, destination)
-    return indic_text['text']
+    return indic_text
 
 def google_text_to_speech(text, language):
     try:
@@ -110,10 +189,41 @@ def google_text_to_speech(text, language):
 
 def text_to_speech(language, text, gender='female'):
     try:
-        api_url = "https://tts-api.ai4bharat.org/"
-        payload = {"input": [{"source": text}], "config": {"gender": gender, "language": {"sourceLanguage": language}}}
-        response = requests.post(api_url, json=payload, timeout=60)
-        audio_content = response.json()['audio'][0]['audioContent']
+        url = "https://api.dhruva.ai4bharat.org/services/inference/pipeline"
+
+        payload = json.dumps({
+            "pipelineTasks": [
+                {
+                    "taskType": "tts",
+                    "config": {
+                        "language": {
+                            "sourceLanguage": language
+                        },
+                        "serviceId": tts_mapping[language],
+                        "gender": gender
+                    }
+                }
+            ],
+            "inputData": {
+                "input": [
+                    {
+                        "source": text
+                    }
+                ],
+                "audio": [
+                    {
+                        "audioContent": None
+                    }
+                ]
+            }
+        })
+        headers = {
+            'Authorization': os.environ["AI4BHARAT_API_KEY"],
+            'Content-Type': 'application/json'
+        }
+
+        response = requests.request("POST", url, headers=headers, data=payload)
+        audio_content = response.json()["pipelineResponse"][0]['audio'][0]['audioContent']
         audio_content = base64.b64decode(audio_content)
     except:
         audio_content = google_text_to_speech(text, language)
